@@ -2,12 +2,13 @@
   "name": "clipsync",
   "version": "1.0.0",
   "description": "Synchronisation chiffrée du presse-papier entre PC et téléphone, en réseau local uniquement.",
+  "author": "EaglesFPV",
   "private": true,
   "main": "electron/main.js",
   "scripts": {
     "start": "electron .",
     "prebuild-icon": "node scripts/build-icon.js",
-    "dist": "npm run prebuild-icon && electron-builder --win"
+    "dist": "npm run prebuild-icon && electron-builder --win --publish never"
   },
   "dependencies": {
     "qrcode": "^1.5.4",
