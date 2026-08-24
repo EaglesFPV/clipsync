@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8" />
+<title>ClipSync</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+<header>
+  <h1>ClipSync</h1>
+  <p>Presse-papier synchronisé, en local, chiffré de bout en bout.</p>
+</header>
+<main>
+  <section>
+    <h2>Appairer un téléphone</h2>
+    <div class="qr-box"><img id="qr" alt="QR code d'appairage" /></div>
+    <div class="pair-url" id="pair-url"></div>
+    <div class="refresh-row">
+      <button id="refresh-qr" class="ghost">Nouveau code (expire dans 2 min)</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Appareils appairés</h2>
+    <div id="devices"></div>
+  </section>
+
+  <section>
+    <h2>Historique</h2>
+    <div id="history"></div>
+  </section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

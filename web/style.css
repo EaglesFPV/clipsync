@@ -1,0 +1,176 @@
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: #0f1115;
+  color: #e6e8ec;
+  font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+header {
+  padding: 18px 18px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+header h1 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #9aa0ab;
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #e2574c;
+}
+
+.dot.online { background: #35c56a; }
+
+main {
+  flex: 1;
+  padding: 0 18px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.card {
+  background: #171a21;
+  border: 1px solid #23262e;
+  border-radius: 14px;
+  padding: 16px;
+}
+
+.send-btn {
+  width: 100%;
+  padding: 16px;
+  font-size: 16px;
+  font-weight: 600;
+  border: none;
+  border-radius: 12px;
+  background: #4f46e5;
+  color: white;
+}
+
+.send-btn:active { background: #6157ea; }
+
+.hint {
+  margin-top: 10px;
+  font-size: 12px;
+  color: #7f8896;
+  text-align: center;
+}
+
+.history-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+  border-bottom: 1px solid #1c1f26;
+}
+
+.history-item:last-child { border-bottom: none; }
+
+.history-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.history-meta {
+  font-size: 11px;
+  color: #7f8896;
+  white-space: nowrap;
+}
+
+.copy-btn {
+  border: 1px solid #2c2f38;
+  background: transparent;
+  color: #c3c7ce;
+  border-radius: 8px;
+  padding: 6px 10px;
+  font-size: 12px;
+}
+
+.copy-btn:active { background: #1a1d24; }
+
+.empty {
+  color: #7f8896;
+  font-style: italic;
+  font-size: 13px;
+}
+
+.pair-form label {
+  display: block;
+  font-size: 12px;
+  color: #9aa0ab;
+  margin-bottom: 6px;
+}
+
+.pair-form input[type="text"] {
+  width: 100%;
+  padding: 10px;
+  border-radius: 8px;
+  border: 1px solid #2c2f38;
+  background: #0f1115;
+  color: #e6e8ec;
+  font-size: 14px;
+  margin-bottom: 12px;
+}
+
+.pair-form button {
+  width: 100%;
+  padding: 12px;
+  border: none;
+  border-radius: 10px;
+  background: #4f46e5;
+  color: white;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.message {
+  font-size: 13px;
+  color: #c3c7ce;
+  line-height: 1.5;
+}
+
+.toast {
+  position: fixed;
+  bottom: 18px;
+  left: 18px;
+  right: 18px;
+  background: #23262e;
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 12px;
+  text-align: center;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 0.2s ease, transform 0.2s ease;
+  pointer-events: none;
+}
+
+.toast.show {
+  opacity: 1;
+  transform: translateY(0);
+}
