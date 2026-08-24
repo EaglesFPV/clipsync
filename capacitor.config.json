@@ -1,0 +1,8 @@
+{
+  "appId": "fr.astrolab.clipsync",
+  "appName": "ClipSync",
+  "webDir": "web",
+  "server": {
+    "androidScheme": "https"
+  }
+}

@@ -62,28 +62,24 @@ function encodePng(width, height, pixelFn) {
   return Buffer.concat([signature, ihdr, idat, iend]);
 }
 
+function insideRoundedRect(x, y, left, right, top, bottom, radius) {
+  const cx = Math.min(Math.max(x, left + radius), right - radius);
+  const cy = Math.min(Math.max(y, top + radius), bottom - radius);
+  if (x < left || x > right || y < top || y > bottom) return false;
+  const dx = x - cx;
+  const dy = y - cy;
+  return dx * dx + dy * dy <= radius * radius || (x >= left + radius && x <= right - radius) || (y >= top + radius && y <= bottom - radius);
+}
+
 /** Simple rounded-square "clipboard" glyph in a single accent color, good enough for a tray icon. */
 function buildIconPng(size = 32) {
   const accent = [79, 70, 229]; // indigo
   const paper = [255, 255, 255];
+  const inset = size * 0.12;
   const radius = size * 0.22;
 
-  function insideRoundedRect(x, y) {
-    const inset = size * 0.12;
-    const left = inset;
-    const right = size - inset;
-    const top = inset;
-    const bottom = size - inset;
-    const cx = Math.min(Math.max(x, left + radius), right - radius);
-    const cy = Math.min(Math.max(y, top + radius), bottom - radius);
-    if (x < left || x > right || y < top || y > bottom) return false;
-    const dx = x - cx;
-    const dy = y - cy;
-    return dx * dx + dy * dy <= radius * radius || (x >= left + radius && x <= right - radius) || (y >= top + radius && y <= bottom - radius);
-  }
-
   return encodePng(size, size, (x, y) => {
-    if (!insideRoundedRect(x + 0.5, y + 0.5)) return [0, 0, 0, 0];
+    if (!insideRoundedRect(x + 0.5, y + 0.5, inset, size - inset, inset, size - inset, radius)) return [0, 0, 0, 0];
     // Inner "paper" strip to suggest a clipboard.
     const stripLeft = size * 0.32;
     const stripRight = size * 0.68;
@@ -96,4 +92,28 @@ function buildIconPng(size = 32) {
   });
 }
 
-module.exports = { buildIconPng };
+/**
+ * The "foreground" layer of an Android adaptive icon: just the white paper glyph, transparent
+ * elsewhere, drawn inside the ~66/108 "safe zone" so OEM launchers don't clip it when masking
+ * to a circle/squircle/rounded-square. The solid indigo backdrop comes from the paired
+ * "background" layer (ic_launcher_background color resource), not from this image.
+ */
+function buildAdaptiveForegroundPng(size = 432) {
+  const paper = [255, 255, 255];
+  const safe = size * 0.62;
+  const offset = (size - safe) / 2;
+  const stripLeft = offset + safe * 0.22;
+  const stripRight = offset + safe * 0.78;
+  const stripTop = offset + safe * 0.3;
+  const stripBottom = offset + safe * 0.62;
+  const radius = safe * 0.08;
+
+  return encodePng(size, size, (x, y) => {
+    if (insideRoundedRect(x + 0.5, y + 0.5, stripLeft, stripRight, stripTop, stripBottom, radius)) {
+      return [...paper, 255];
+    }
+    return [0, 0, 0, 0];
+  });
+}
+
+module.exports = { buildIconPng, buildAdaptiveForegroundPng };

@@ -8,11 +8,26 @@
 <body>
 <header>
   <h1>ClipSync</h1>
-  <p>Presse-papier synchronisé, en local, chiffré de bout en bout.</p>
+  <p>Presse-papier synchronisé, chiffré de bout en bout, en local ou à distance.</p>
 </header>
 <main>
   <section>
+    <h2>Accès à distance</h2>
+    <div id="upnp-status" class="status-line"></div>
+    <label for="remote-host" class="field-label">Nom d'hôte DDNS (ex. depuis le NAS) + port externe</label>
+    <div class="remote-row">
+      <input type="text" id="remote-host" placeholder="tonnas.synology.me:51828" />
+      <button id="save-remote-host" class="ghost">Enregistrer</button>
+    </div>
+    <div class="hint" id="remote-hint"></div>
+  </section>
+
+  <section>
     <h2>Appairer un téléphone</h2>
+    <div class="tab-row">
+      <button id="tab-app" class="tab active">App Android</button>
+      <button id="tab-browser" class="tab">Navigateur</button>
+    </div>
     <div class="qr-box"><img id="qr" alt="QR code d'appairage" /></div>
     <div class="pair-url" id="pair-url"></div>
     <div class="refresh-row">

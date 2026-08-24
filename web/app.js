@@ -11,6 +11,7 @@ let hmacKey = null;
 let aesKey = null;
 let history = [];
 let reconnectTimer = null;
+let activeHosts = [];
 
 // ---- base64url <-> bytes -------------------------------------------------
 
@@ -29,20 +30,20 @@ function bytesToB64url(bytes) {
   return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-// ---- crypto ---------------------------------------------------------------
-
-async function loadDeviceKeys(rawKeyB64) {
-  const raw = b64urlToBytesFromStandardBase64(rawKeyB64);
-  hmacKey = await crypto.subtle.importKey('raw', raw, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-  aesKey = await crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
-}
-
-function b64urlToBytesFromStandardBase64(str) {
-  // The server sends the raw device key as plain (non-url) base64 in the /api/pair response.
+function stdBase64ToBytes(str) {
   const bin = atob(str);
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   return bytes;
+}
+
+// ---- crypto ---------------------------------------------------------------
+
+async function loadDeviceKeys(rawKeyB64) {
+  // The server sends the raw device key as plain (non-url) base64.
+  const raw = stdBase64ToBytes(rawKeyB64);
+  hmacKey = await crypto.subtle.importKey('raw', raw, { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  aesKey = await crypto.subtle.importKey('raw', raw, { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']);
 }
 
 async function signChallenge(challengeB64url) {
@@ -69,6 +70,30 @@ async function decryptFromServer(envelopeB64url) {
   return JSON.parse(new TextDecoder().decode(ptBuf));
 }
 
+// ---- native clipboard (Capacitor) with browser fallback -----------------------
+
+function nativeClipboard() {
+  return window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Clipboard;
+}
+
+async function readClipboard() {
+  const plugin = nativeClipboard();
+  if (plugin) {
+    const { value } = await plugin.read();
+    return value || '';
+  }
+  return navigator.clipboard.readText();
+}
+
+async function writeClipboard(text) {
+  const plugin = nativeClipboard();
+  if (plugin) {
+    await plugin.write({ string: text });
+    return;
+  }
+  await navigator.clipboard.writeText(text);
+}
+
 // ---- device storage ---------------------------------------------------------
 
 function getStoredDevice() {
@@ -81,6 +106,16 @@ function getStoredDevice() {
 
 function storeDevice(device) {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(device));
+}
+
+/** LAN hosts first (fastest on the home network), then the remote/DDNS host, last-good-host first. */
+function candidateHosts(device) {
+  const hosts = [...(device.lanHosts || [])];
+  if (device.remoteHost && !hosts.includes(device.remoteHost)) hosts.push(device.remoteHost);
+  if (device.lastGoodHost && hosts.includes(device.lastGoodHost)) {
+    return [device.lastGoodHost, ...hosts.filter((h) => h !== device.lastGoodHost)];
+  }
+  return hosts;
 }
 
 // ---- UI ---------------------------------------------------------------------
@@ -136,7 +171,7 @@ function renderHistory() {
     copyBtn.textContent = 'Copier';
     copyBtn.addEventListener('click', async () => {
       try {
-        await navigator.clipboard.writeText(entry.text);
+        await writeClipboard(entry.text);
         showToast('Copié dans le presse-papier.');
       } catch {
         showToast("Impossible de copier — autorisez l'accès au presse-papier.");
@@ -151,7 +186,7 @@ function renderHistory() {
 
 async function onSendClicked() {
   try {
-    const text = await navigator.clipboard.readText();
+    const text = await readClipboard();
     if (!text) {
       showToast('Le presse-papier est vide.');
       return;
@@ -164,18 +199,19 @@ async function onSendClicked() {
   }
 }
 
-function renderPairingForm(code) {
+function renderPairingForm(code, hosts) {
   appEl.innerHTML = `
     <div class="card pair-form">
       <p class="message">Nouvel appareil détecté. Donnez-lui un nom puis appairez-le avec votre PC.</p>
       <label for="device-name">Nom de cet appareil</label>
       <input type="text" id="device-name" value="Mon téléphone" />
       <button id="pair-btn">Appairer</button>
+      <p class="message" id="pair-error" style="color:#e0574c;margin-top:10px;"></p>
     </div>
   `;
   document.getElementById('pair-btn').addEventListener('click', async () => {
     const name = document.getElementById('device-name').value || 'Mon téléphone';
-    await completePairing(code, name);
+    await completePairing(code, name, hosts);
   });
 }
 
@@ -189,45 +225,130 @@ function renderNotPaired() {
 
 // ---- pairing + connection -----------------------------------------------------
 
-async function completePairing(code, deviceName) {
-  const res = await fetch('/api/pair', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ code, deviceName }),
-  });
-  if (!res.ok) {
-    appEl.innerHTML = `<div class="card"><p class="message">Ce code d'appairage est invalide ou a expiré. Générez-en un nouveau depuis le PC et rescannez.</p></div>`;
+/**
+ * hosts: explicit "host:port" candidates to pair against (used by the Android app's deep-link
+ * flow, which has no page origin to fall back on). When omitted, pairs against the page's own
+ * origin — the browser/PWA flow, reached by navigating to the PC's URL, already IS that host.
+ */
+async function completePairing(code, deviceName, hosts) {
+  const targets = hosts && hosts.length ? hosts.map((h) => `https://${h}/api/pair`) : ['/api/pair'];
+  let response = null;
+  for (const url of targets) {
+    try {
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code, deviceName }),
+      });
+      if (res.ok) {
+        response = await res.json();
+        break;
+      }
+    } catch {
+      // try the next candidate host
+    }
+  }
+
+  if (!response) {
+    const errorEl = document.getElementById('pair-error');
+    const msg = "Impossible d'appairer — code invalide/expiré, ou aucun des hôtes n'est joignable depuis ici.";
+    if (errorEl) errorEl.textContent = msg;
+    else appEl.innerHTML = `<div class="card"><p class="message">${msg}</p></div>`;
     return;
   }
-  const device = await res.json();
+
+  const device = {
+    deviceId: response.deviceId,
+    key: response.key,
+    name: response.name,
+    lanHosts: response.lanHosts || (hosts ? [] : [location.host]),
+    remoteHost: response.remoteHost || null,
+    lastGoodHost: null,
+  };
   storeDevice(device);
-  window.history.replaceState({}, '', '/');
+  if (!hosts) window.history.replaceState({}, '', '/');
   await loadDeviceKeys(device.key);
-  connect(device.deviceId);
+  connect(device.deviceId, candidateHosts(device));
 }
 
-function connect(deviceId) {
+function connectToHost(host, deviceId, timeoutMs) {
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const socket = new WebSocket(`wss://${host}/ws?deviceId=${encodeURIComponent(deviceId)}`);
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      socket.close();
+      reject(new Error('timeout'));
+    }, timeoutMs);
+
+    socket.addEventListener('message', async (event) => {
+      const msg = JSON.parse(event.data);
+      if (msg.type === 'challenge') {
+        const proof = await signChallenge(msg.challenge);
+        socket.send(JSON.stringify({ type: 'authResponse', proof }));
+      } else if (msg.type === 'authOk' && !settled) {
+        settled = true;
+        clearTimeout(timer);
+        resolve({ socket, host, payload: msg.payload });
+      }
+    });
+    socket.addEventListener('error', () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(new Error('ws_error'));
+    });
+    socket.addEventListener('close', () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(new Error('closed'));
+    });
+  });
+}
+
+async function connect(deviceId, hosts) {
   clearTimeout(reconnectTimer);
+  activeHosts = hosts;
+  if (!hosts || hosts.length === 0) {
+    setStatus(false, "Aucun hôte connu — réappaire cet appareil.");
+    return;
+  }
   setStatus(false, 'Connexion…');
-  ws = new WebSocket(`wss://${location.host}/ws?deviceId=${encodeURIComponent(deviceId)}`);
+
+  const attempts = hosts.map((host) =>
+    connectToHost(host, deviceId, 6000).catch((err) => ({ failed: true, host, err }))
+  );
+  const results = await Promise.all(attempts);
+  const winner = results.find((r) => !r.failed);
+  for (const r of results) {
+    if (!r.failed && r.socket !== (winner && winner.socket)) r.socket.close();
+  }
+
+  if (!winner) {
+    setStatus(false, 'Hors ligne');
+    reconnectTimer = setTimeout(() => connect(deviceId, hosts), 3000);
+    return;
+  }
+
+  ws = winner.socket;
+  const data = await decryptFromServer(winner.payload);
+  history = data.history || [];
+
+  const device = getStoredDevice();
+  if (device) {
+    device.lastGoodHost = winner.host;
+    if (Array.isArray(data.lanHosts)) device.lanHosts = data.lanHosts;
+    if ('remoteHost' in data) device.remoteHost = data.remoteHost;
+    storeDevice(device);
+  }
+
+  setStatus(true, 'Synchronisé');
+  renderSyncedApp();
 
   ws.addEventListener('message', async (event) => {
     const msg = JSON.parse(event.data);
-
-    if (msg.type === 'challenge') {
-      const proof = await signChallenge(msg.challenge);
-      ws.send(JSON.stringify({ type: 'authResponse', proof }));
-      return;
-    }
-
-    if (msg.type === 'authOk') {
-      const data = await decryptFromServer(msg.payload);
-      history = data.history || [];
-      setStatus(true, 'Synchronisé');
-      renderSyncedApp();
-      return;
-    }
-
     if (msg.type === 'clip') {
       const entry = await decryptFromServer(msg.payload);
       history = [entry, ...history].slice(0, 25);
@@ -238,18 +359,32 @@ function connect(deviceId) {
 
   ws.addEventListener('close', () => {
     setStatus(false, 'Hors ligne');
-    reconnectTimer = setTimeout(() => connect(deviceId), 2000);
+    reconnectTimer = setTimeout(() => connect(deviceId, hosts), 2000);
   });
-
-  ws.addEventListener('error', () => ws.close());
 }
 
 document.addEventListener('visibilitychange', () => {
   const device = getStoredDevice();
   if (document.visibilityState === 'visible' && device && (!ws || ws.readyState === WebSocket.CLOSED)) {
-    connect(device.deviceId);
+    connect(device.deviceId, candidateHosts(device));
   }
 });
+
+// ---- deep-link pairing (Android app, clipsync://pair?code=...&lan=...&remote=...) ------------
+
+window.__clipsyncHandleDeepLink = function handleDeepLink(url) {
+  try {
+    const parsed = new URL(url);
+    const code = parsed.searchParams.get('code');
+    if (!code) return;
+    const hosts = [];
+    if (parsed.searchParams.get('lan')) hosts.push(...parsed.searchParams.get('lan').split(','));
+    if (parsed.searchParams.get('remote')) hosts.push(parsed.searchParams.get('remote'));
+    renderPairingForm(code, hosts);
+  } catch {
+    // malformed deep link: ignore rather than crash the app
+  }
+};
 
 // ---- boot -----------------------------------------------------------------
 
@@ -264,12 +399,12 @@ async function boot() {
 
   if (stored) {
     await loadDeviceKeys(stored.key);
-    connect(stored.deviceId);
+    connect(stored.deviceId, candidateHosts(stored));
     return;
   }
 
   if (code) {
-    renderPairingForm(code);
+    renderPairingForm(code, null);
     return;
   }
 

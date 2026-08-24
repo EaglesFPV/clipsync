@@ -5,7 +5,9 @@ const { app, BrowserWindow, Tray, Menu, clipboard, ipcMain, nativeImage, shell }
 const QRCode = require('qrcode');
 
 const { createServer } = require('../server');
+const { startUpnp } = require('../server/upnp');
 const { buildIconPng } = require('./icon');
+const { loadSettings, saveSettings } = require('./settings');
 
 const PORT = 51828;
 const POLL_MS = 700;
@@ -13,6 +15,9 @@ const POLL_MS = 700;
 let tray = null;
 let popupWindow = null;
 let server = null;
+let upnp = null;
+let settings = { remoteHost: null };
+let dataDir = '';
 let lastKnownText = '';
 
 function pickLanIp(lanIps) {
@@ -20,8 +25,20 @@ function pickLanIp(lanIps) {
 }
 
 function buildJoinUrl(code) {
+  // Pairing happens next to the PC, so the LAN address is the fastest/most reliable choice —
+  // the phone learns the remote (DDNS) host too as part of the pairing response and switches
+  // to it automatically once it's away from the home network.
   const ip = pickLanIp(server.lanIps);
   return `https://${ip}:${server.port}/?code=${encodeURIComponent(code)}`;
+}
+
+function buildAppJoinUrl(code) {
+  // The Android app has no page origin to pair against, so the deep link carries every host
+  // it should try (LAN candidates + the configured remote/DDNS host, if any).
+  const lan = server.lanIps.map((ip) => `${ip}:${server.port}`).join(',');
+  const params = new URLSearchParams({ code, lan });
+  if (settings.remoteHost) params.set('remote', settings.remoteHost);
+  return `clipsync://pair?${params.toString()}`;
 }
 
 function startClipboardWatcher() {
@@ -98,32 +115,44 @@ function createTray() {
   tray.setContextMenu(menu);
 }
 
-function updatePopupState() {
-  if (popupWindow && !popupWindow.isDestroyed()) {
-    popupWindow.webContents.send('state:update', {
-      devices: server.pairing.listDevices(),
-      connected: server.connectedDeviceIds(),
-      history: server.hub.getHistory(),
-      lanIps: server.lanIps,
-      port: server.port,
-    });
-  }
-}
-
-function registerIpc() {
-  ipcMain.handle('popup:get-state', () => ({
+function snapshotState() {
+  return {
     devices: server.pairing.listDevices(),
     connected: server.connectedDeviceIds(),
     history: server.hub.getHistory(),
     lanIps: server.lanIps,
     port: server.port,
-  }));
+    remoteHost: settings.remoteHost,
+    upnp: upnp ? upnp.getStatus() : { active: false, externalIp: null, error: null },
+  };
+}
+
+function updatePopupState() {
+  if (popupWindow && !popupWindow.isDestroyed()) {
+    popupWindow.webContents.send('state:update', snapshotState());
+  }
+}
+
+function registerIpc() {
+  ipcMain.handle('popup:get-state', () => snapshotState());
 
   ipcMain.handle('popup:new-pairing-code', async () => {
     const code = server.pairing.createPairingCode();
     const url = buildJoinUrl(code);
-    const qrDataUrl = await QRCode.toDataURL(url, { margin: 1, width: 260 });
-    return { url, qrDataUrl, expiresInMs: 2 * 60 * 1000 };
+    const appUrl = buildAppJoinUrl(code);
+    const [qrDataUrl, appQrDataUrl] = await Promise.all([
+      QRCode.toDataURL(url, { margin: 1, width: 260 }),
+      QRCode.toDataURL(appUrl, { margin: 1, width: 260 }),
+    ]);
+    return { url, qrDataUrl, appUrl, appQrDataUrl, expiresInMs: 2 * 60 * 1000 };
+  });
+
+  ipcMain.handle('popup:set-remote-host', (_evt, remoteHost) => {
+    const trimmed = typeof remoteHost === 'string' ? remoteHost.trim() : '';
+    settings.remoteHost = trimmed || null;
+    saveSettings(dataDir, settings);
+    updatePopupState();
+    return settings.remoteHost;
   });
 
   ipcMain.handle('popup:revoke-device', (_evt, deviceId) => {
@@ -144,18 +173,20 @@ function registerIpc() {
   });
 }
 
-app.whenReady().then(() => {
+app.whenReady().then(async () => {
   // Reading the clipboard before the app is ready can hang on Windows (no message pump yet),
   // so this is the earliest point it's safe to touch electron.clipboard.
   lastKnownText = clipboard.readText() || '';
 
-  const dataDir = app.getPath('userData');
+  dataDir = app.getPath('userData');
+  settings = loadSettings(dataDir);
   const webDir = path.join(__dirname, '..', 'web');
 
   server = createServer({
     dataDir,
     webDir,
     port: PORT,
+    getRemoteHost: () => settings.remoteHost,
     onRemoteClip: (text) => {
       lastKnownText = text;
       clipboard.writeText(text);
@@ -169,6 +200,14 @@ app.whenReady().then(() => {
   registerIpc();
   createPopupWindow();
   startClipboardWatcher();
+
+  // Best-effort automatic port forwarding; never blocks startup, and any failure just means
+  // the popup will show manual instructions instead (see the "Accès à distance" section).
+  upnp = startUpnp(PORT);
+  upnp
+    .start()
+    .then(() => updatePopupState())
+    .catch(() => updatePopupState());
 });
 
 app.on('window-all-closed', (e) => {
@@ -179,4 +218,5 @@ app.on('window-all-closed', (e) => {
 app.on('before-quit', () => {
   app.isQuitting = true;
   if (server) server.stop();
+  if (upnp) upnp.stop();
 });

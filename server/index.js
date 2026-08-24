@@ -10,6 +10,7 @@ const { getOrCreateCert, detectLanIps } = require('./tls');
 const { PairingManager } = require('./pairing');
 const { ClipboardHub } = require('./clipboardHub');
 const { encryptForDevice, decryptFromDevice, hmac, timingSafeEqualB64 } = require('./crypto');
+const { RateLimiter } = require('./rateLimiter');
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -75,27 +76,54 @@ function serveStatic(webDir, req, res) {
  * encrypted with a per-device key that only ever leaves the PC via the QR code.
  *
  * options.onRemoteClip(text, device) is called when a paired phone pushes a clip to sync locally.
+ * options.getRemoteHost() optionally returns the "host:port" reachable from outside the LAN
+ * (DDNS hostname + forwarded port), read live on every call so a change in settings propagates
+ * to clients without a server restart.
  */
-function createServer({ dataDir, webDir, port = 51828, onRemoteClip }) {
+function createServer({ dataDir, webDir, port = 51828, onRemoteClip, getRemoteHost }) {
   const { key, cert, fingerprint } = getOrCreateCert(dataDir);
   const pairing = new PairingManager(dataDir);
   const hub = new ClipboardHub();
+  const pairLimiter = new RateLimiter({ maxFailures: 5, windowMs: 5 * 60 * 1000, blockMs: 15 * 60 * 1000 });
+  const authLimiter = new RateLimiter({ maxFailures: 5, windowMs: 5 * 60 * 1000, blockMs: 15 * 60 * 1000 });
 
   // deviceId -> Set<WebSocket>, only ever contains sockets that passed the challenge/response auth.
   const sockets = new Map();
 
+  function connectionInfo() {
+    return {
+      lanHosts: detectLanIps().map((ip) => `${ip}:${port}`),
+      remoteHost: typeof getRemoteHost === 'function' ? getRemoteHost() || null : null,
+    };
+  }
+
   const httpServer = https.createServer({ key, cert }, (req, res) => {
     if (req.method === 'POST' && req.url === '/api/pair') {
+      const ip = req.socket.remoteAddress || 'unknown';
+      if (pairLimiter.isBlocked(ip)) {
+        res.writeHead(429, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'too_many_attempts' }));
+        return;
+      }
       readJsonBody(req)
         .then((body) => {
           const result = pairing.completePairing(body.code, body.deviceName);
           if (!result) {
+            pairLimiter.recordFailure(ip);
             res.writeHead(400, { 'Content-Type': 'application/json' });
             res.end(JSON.stringify({ error: 'invalid_or_expired_code' }));
             return;
           }
+          pairLimiter.recordSuccess(ip);
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ deviceId: result.id, key: result.key.toString('base64'), name: result.name }));
+          res.end(
+            JSON.stringify({
+              deviceId: result.id,
+              key: result.key.toString('base64'),
+              name: result.name,
+              ...connectionInfo(),
+            })
+          );
         })
         .catch(() => {
           res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -109,6 +137,12 @@ function createServer({ dataDir, webDir, port = 51828, onRemoteClip }) {
   const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
 
   wss.on('connection', (ws, req) => {
+    const ip = req.socket.remoteAddress || 'unknown';
+    if (authLimiter.isBlocked(ip)) {
+      ws.close(4029, 'too_many_attempts');
+      return;
+    }
+
     const url = new URL(req.url, 'https://placeholder');
     const deviceId = url.searchParams.get('deviceId');
     const device = deviceId ? pairing.getDevice(deviceId) : null;
@@ -140,15 +174,17 @@ function createServer({ dataDir, webDir, port = 51828, onRemoteClip }) {
         if (typeof msg.proof === 'string' && timingSafeEqualB64(msg.proof, expected)) {
           authenticated = true;
           clearTimeout(authTimeout);
+          authLimiter.recordSuccess(ip);
           if (!sockets.has(deviceId)) sockets.set(deviceId, new Set());
           sockets.get(deviceId).add(ws);
           ws.send(
             JSON.stringify({
               type: 'authOk',
-              payload: encryptForDevice(device.key, { history: hub.getHistory() }),
+              payload: encryptForDevice(device.key, { history: hub.getHistory(), ...connectionInfo() }),
             })
           );
         } else {
+          authLimiter.recordFailure(ip);
           ws.close(4003, 'bad_proof');
         }
         return;
@@ -217,6 +253,8 @@ function createServer({ dataDir, webDir, port = 51828, onRemoteClip }) {
 
   function stop() {
     clearInterval(pingInterval);
+    pairLimiter.stop();
+    authLimiter.stop();
     wss.close();
     httpServer.close();
   }

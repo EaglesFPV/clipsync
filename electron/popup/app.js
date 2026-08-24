@@ -71,30 +71,77 @@ function renderHistory() {
   }
 }
 
+function renderRemoteAccess() {
+  const statusEl = document.getElementById('upnp-status');
+  const upnp = currentState.upnp || { active: false, externalIp: null, error: null };
+  if (upnp.active) {
+    statusEl.className = 'status-line ok';
+    statusEl.textContent = `Redirection de port automatique réussie${upnp.externalIp ? ' — IP publique actuelle : ' + upnp.externalIp : ''}.`;
+  } else {
+    statusEl.className = 'status-line warn';
+    statusEl.textContent = "Redirection automatique indisponible sur ce routeur (UPnP désactivé ou non supporté) — ouvre le port manuellement, voir ci-dessous.";
+  }
+
+  const input = document.getElementById('remote-host');
+  if (document.activeElement !== input) {
+    input.value = currentState.remoteHost || '';
+  }
+
+  const port = currentState.port;
+  const lan = (currentState.lanIps && currentState.lanIps[0]) || '?';
+  document.getElementById('remote-hint').textContent =
+    `Redirige le port TCP ${port} vers ${lan}:${port} sur ton routeur (automatique si le statut ci-dessus est vert), puis renseigne ici le nom d'hôte DDNS — ex. active-le depuis le NAS : DSM > Panneau de configuration > Accès externe > DDNS.`;
+}
+
 function escapeHtml(str) {
   const div = document.createElement('div');
   div.textContent = str;
   return div.innerHTML;
 }
 
+let pairingInfo = null;
+let activeTab = 'app';
+
+function renderActiveQr() {
+  if (!pairingInfo) return;
+  const el = document.getElementById('qr');
+  const urlEl = document.getElementById('pair-url');
+  if (activeTab === 'app') {
+    el.src = pairingInfo.appQrDataUrl;
+    urlEl.textContent = 'Scanne avec l\'appareil photo — ouvre directement dans l\'app ClipSync.';
+  } else {
+    el.src = pairingInfo.qrDataUrl;
+    urlEl.textContent = pairingInfo.url;
+  }
+  document.getElementById('tab-app').classList.toggle('active', activeTab === 'app');
+  document.getElementById('tab-browser').classList.toggle('active', activeTab === 'browser');
+}
+
 async function refreshQr() {
-  const { url, qrDataUrl } = await window.clipsync.newPairingCode();
-  document.getElementById('qr').src = qrDataUrl;
-  document.getElementById('pair-url').textContent = url;
+  pairingInfo = await window.clipsync.newPairingCode();
+  renderActiveQr();
 }
 
 async function init() {
   currentState = await window.clipsync.getState();
   renderDevices();
   renderHistory();
+  renderRemoteAccess();
   await refreshQr();
 
   document.getElementById('refresh-qr').onclick = refreshQr;
+  document.getElementById('tab-app').onclick = () => { activeTab = 'app'; renderActiveQr(); };
+  document.getElementById('tab-browser').onclick = () => { activeTab = 'browser'; renderActiveQr(); };
+  document.getElementById('save-remote-host').onclick = async () => {
+    const value = document.getElementById('remote-host').value;
+    currentState.remoteHost = await window.clipsync.setRemoteHost(value);
+  };
 
   window.clipsync.onStateUpdate((state) => {
     currentState = state;
     renderDevices();
     renderHistory();
+    renderRemoteAccess();
   });
 }
 
