@@ -72,6 +72,13 @@ function renderHistory() {
 }
 
 function renderRemoteAccess() {
+  const enabled = !!currentState.remoteAccessEnabled;
+  const toggle = document.getElementById('remote-access-toggle');
+  if (document.activeElement !== toggle) toggle.checked = enabled;
+  document.getElementById('remote-access-panel').style.display = enabled ? '' : 'none';
+  document.getElementById('remote-off-hint').style.display = enabled ? 'none' : '';
+  if (!enabled) return;
+
   const statusEl = document.getElementById('upnp-status');
   const upnp = currentState.upnp || { active: false, externalIp: null, error: null };
   if (upnp.active) {
@@ -135,6 +142,10 @@ async function init() {
   document.getElementById('save-remote-host').onclick = async () => {
     const value = document.getElementById('remote-host').value;
     currentState.remoteHost = await window.clipsync.setRemoteHost(value);
+  };
+  document.getElementById('remote-access-toggle').onchange = async (e) => {
+    currentState.remoteAccessEnabled = await window.clipsync.setRemoteAccessEnabled(e.target.checked);
+    renderRemoteAccess();
   };
 
   window.clipsync.onStateUpdate((state) => {

@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('clipsync', {
   newPairingCode: () => ipcRenderer.invoke('popup:new-pairing-code'),
   revokeDevice: (deviceId) => ipcRenderer.invoke('popup:revoke-device', deviceId),
   setRemoteHost: (remoteHost) => ipcRenderer.invoke('popup:set-remote-host', remoteHost),
+  setRemoteAccessEnabled: (enabled) => ipcRenderer.invoke('popup:set-remote-access-enabled', enabled),
   copyEntry: (text) => ipcRenderer.invoke('popup:copy-entry', text),
   openExternal: (url) => ipcRenderer.invoke('popup:open-external', url),
   onStateUpdate: (callback) => {

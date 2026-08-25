@@ -16,7 +16,7 @@ let tray = null;
 let popupWindow = null;
 let server = null;
 let upnp = null;
-let settings = { remoteHost: null };
+let settings = { remoteAccessEnabled: false, remoteHost: null };
 let dataDir = '';
 let lastKnownText = '';
 
@@ -37,7 +37,7 @@ function buildAppJoinUrl(code) {
   // it should try (LAN candidates + the configured remote/DDNS host, if any).
   const lan = server.lanIps.map((ip) => `${ip}:${server.port}`).join(',');
   const params = new URLSearchParams({ code, lan });
-  if (settings.remoteHost) params.set('remote', settings.remoteHost);
+  if (settings.remoteAccessEnabled && settings.remoteHost) params.set('remote', settings.remoteHost);
   return `clipsync://pair?${params.toString()}`;
 }
 
@@ -122,9 +122,29 @@ function snapshotState() {
     history: server.hub.getHistory(),
     lanIps: server.lanIps,
     port: server.port,
+    remoteAccessEnabled: settings.remoteAccessEnabled,
     remoteHost: settings.remoteHost,
     upnp: upnp ? upnp.getStatus() : { active: false, externalIp: null, error: null },
   };
+}
+
+// UPnP only ever runs while remote access is explicitly enabled — until then the app never
+// touches the router, matching the "local by default" choice.
+async function enableRemoteAccess() {
+  if (upnp) return;
+  upnp = startUpnp(PORT);
+  try {
+    await upnp.start();
+  } finally {
+    updatePopupState();
+  }
+}
+
+function disableRemoteAccess() {
+  if (!upnp) return;
+  upnp.stop();
+  upnp = null;
+  updatePopupState();
 }
 
 function updatePopupState() {
@@ -153,6 +173,15 @@ function registerIpc() {
     saveSettings(dataDir, settings);
     updatePopupState();
     return settings.remoteHost;
+  });
+
+  ipcMain.handle('popup:set-remote-access-enabled', async (_evt, enabled) => {
+    settings.remoteAccessEnabled = enabled === true;
+    saveSettings(dataDir, settings);
+    if (settings.remoteAccessEnabled) await enableRemoteAccess();
+    else disableRemoteAccess();
+    updatePopupState();
+    return settings.remoteAccessEnabled;
   });
 
   ipcMain.handle('popup:revoke-device', (_evt, deviceId) => {
@@ -186,7 +215,7 @@ app.whenReady().then(async () => {
     dataDir,
     webDir,
     port: PORT,
-    getRemoteHost: () => settings.remoteHost,
+    getRemoteHost: () => (settings.remoteAccessEnabled ? settings.remoteHost : null),
     onRemoteClip: (text) => {
       lastKnownText = text;
       clipboard.writeText(text);
@@ -201,13 +230,7 @@ app.whenReady().then(async () => {
   createPopupWindow();
   startClipboardWatcher();
 
-  // Best-effort automatic port forwarding; never blocks startup, and any failure just means
-  // the popup will show manual instructions instead (see the "Accès à distance" section).
-  upnp = startUpnp(PORT);
-  upnp
-    .start()
-    .then(() => updatePopupState())
-    .catch(() => updatePopupState());
+  if (settings.remoteAccessEnabled) enableRemoteAccess();
 });
 
 app.on('window-all-closed', (e) => {

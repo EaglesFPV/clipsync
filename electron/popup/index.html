@@ -12,14 +12,25 @@
 </header>
 <main>
   <section>
-    <h2>Accès à distance</h2>
-    <div id="upnp-status" class="status-line"></div>
-    <label for="remote-host" class="field-label">Nom d'hôte DDNS (ex. depuis le NAS) + port externe</label>
-    <div class="remote-row">
-      <input type="text" id="remote-host" placeholder="tonnas.synology.me:51828" />
-      <button id="save-remote-host" class="ghost">Enregistrer</button>
+    <div class="section-head-row">
+      <h2 class="no-margin">Accès à distance</h2>
+      <label class="switch">
+        <input type="checkbox" id="remote-access-toggle" />
+        <span class="switch-track"></span>
+      </label>
     </div>
-    <div class="hint" id="remote-hint"></div>
+    <div class="hint" id="remote-off-hint">
+      Désactivé — la synchronisation ne fonctionne que sur le même réseau local (Wi-Fi, ou partage de connexion). Aucun port n'est ouvert sur ton routeur.
+    </div>
+    <div id="remote-access-panel" style="display:none;">
+      <div id="upnp-status" class="status-line"></div>
+      <label for="remote-host" class="field-label">Nom d'hôte DDNS (ex. depuis le NAS ou ta box) + port externe</label>
+      <div class="remote-row">
+        <input type="text" id="remote-host" placeholder="tonnas.synology.me:51828" />
+        <button id="save-remote-host" class="ghost">Enregistrer</button>
+      </div>
+      <div class="hint" id="remote-hint"></div>
+    </div>
   </section>
 
   <section>
