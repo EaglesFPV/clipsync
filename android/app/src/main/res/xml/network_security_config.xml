@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Android blocks plain HTTP by default (API 28+). ClipSync only ever talks to the user's own PC
+  (an address they scan via QR/deep link, never arbitrary web content), and every payload is
+  already encrypted with AES-256-GCM independent of the transport, so allowing cleartext here
+  doesn't expose the app to a general MITM risk the way it would for a normal browser.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

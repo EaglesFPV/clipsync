@@ -38,6 +38,17 @@ function decryptFromDevice(key, envelopeB64) {
   return JSON.parse(plaintext.toString('utf8'));
 }
 
+/**
+ * Derives an AES-256 key from the pairing code itself (out-of-band: only known to the PC and
+ * whoever scanned the QR/deep link). Used to encrypt the one-time /api/pair response so the
+ * device key it hands out stays confidential even over plain HTTP — needed because Android's
+ * WebView has no interactive way to accept our self-signed HTTPS certificate, so the app talks
+ * to the PC over HTTP for LAN traffic instead.
+ */
+function deriveCodeKey(code) {
+  return crypto.createHash('sha256').update(code, 'utf8').digest();
+}
+
 function hmac(key, dataBuf) {
   return crypto.createHmac('sha256', key).update(dataBuf).digest();
 }
@@ -54,6 +65,7 @@ module.exports = {
   generateDeviceKey,
   encryptForDevice,
   decryptFromDevice,
+  deriveCodeKey,
   hmac,
   timingSafeEqualB64,
 };

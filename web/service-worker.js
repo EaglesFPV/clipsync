@@ -2,7 +2,7 @@
 
 // Caches only the static app shell — never /api/pair or the /ws socket — so the page
 // opens instantly, while pairing and clipboard sync always happen live over the network.
-const CACHE_NAME = 'clipsync-shell-v2';
+const CACHE_NAME = 'clipsync-shell-v3';
 const SHELL_FILES = ['/', '/index.html', '/app.js', '/capacitor-bridge.js', '/style.css', '/manifest.webmanifest', '/icon.svg'];
 
 self.addEventListener('install', (event) => {

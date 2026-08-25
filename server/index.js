@@ -2,6 +2,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const http = require('http');
 const https = require('https');
 const crypto = require('crypto');
 const { WebSocketServer } = require('ws');
@@ -9,7 +10,13 @@ const { WebSocketServer } = require('ws');
 const { getOrCreateCert, detectLanIps } = require('./tls');
 const { PairingManager } = require('./pairing');
 const { ClipboardHub } = require('./clipboardHub');
-const { encryptForDevice, decryptFromDevice, hmac, timingSafeEqualB64 } = require('./crypto');
+const {
+  encryptForDevice,
+  decryptFromDevice,
+  deriveCodeKey,
+  hmac,
+  timingSafeEqualB64,
+} = require('./crypto');
 const { RateLimiter } = require('./rateLimiter');
 
 const MIME = {
@@ -71,17 +78,26 @@ function serveStatic(webDir, req, res) {
 }
 
 /**
- * Boots the local HTTPS + WebSocket server. Nothing here ever talks to the internet:
- * it binds on the LAN interface and every payload beyond the pairing handshake is
- * encrypted with a per-device key that only ever leaves the PC via the QR code.
+ * Boots the local server(s) that everything talks to. Nothing here ever depends on the
+ * internet: it binds on the LAN interface(s) and every payload beyond the initial pairing
+ * exchange is encrypted with a per-device key that only ever leaves the PC via the QR code —
+ * and even that initial exchange is encrypted with a key derived from the (out-of-band) pairing
+ * code itself, so it stays confidential regardless of transport.
+ *
+ * Two listeners run side by side, sharing all state and logic:
+ *  - HTTPS/WSS on `port`, for the browser/PWA path (needs a secure context for the Clipboard
+ *    and service worker APIs, and browsers let a user click through the self-signed cert once).
+ *  - plain HTTP/WS on `httpPort`, for the Android app: its WebView has no interactive way to
+ *    accept a self-signed certificate, so it talks to the PC over plain HTTP instead — safe
+ *    because nothing sent over it is meaningful without the AES-256-GCM keys layered on top.
  *
  * options.onRemoteClip(text, device) is called when a paired phone pushes a clip to sync locally.
  * options.getRemoteHost() optionally returns the "host:port" reachable from outside the LAN
  * (DDNS hostname + forwarded port), read live on every call so a change in settings propagates
  * to clients without a server restart.
- * options.onListenError(err) is called if the server fails to bind (e.g. port already in use).
+ * options.onListenError(err) is called if a server fails to bind (e.g. port already in use).
  */
-function createServer({ dataDir, webDir, port = 51828, onRemoteClip, getRemoteHost, onListenError }) {
+function createServer({ dataDir, webDir, port = 51828, httpPort = 51829, onRemoteClip, getRemoteHost, onListenError }) {
   const { key, cert, fingerprint } = getOrCreateCert(dataDir);
   const pairing = new PairingManager(dataDir);
   const hub = new ClipboardHub();
@@ -91,14 +107,14 @@ function createServer({ dataDir, webDir, port = 51828, onRemoteClip, getRemoteHo
   // deviceId -> Set<WebSocket>, only ever contains sockets that passed the challenge/response auth.
   const sockets = new Map();
 
-  function connectionInfo() {
+  function connectionInfo(reportPort) {
     return {
-      lanHosts: detectLanIps().map((ip) => `${ip}:${port}`),
+      lanHosts: detectLanIps().map((ip) => `${ip}:${reportPort}`),
       remoteHost: typeof getRemoteHost === 'function' ? getRemoteHost() || null : null,
     };
   }
 
-  const httpServer = https.createServer({ key, cert }, (req, res) => {
+  function handleRequest(req, res) {
     if (req.method === 'POST' && req.url === '/api/pair') {
       const ip = req.socket.remoteAddress || 'unknown';
       if (pairLimiter.isBlocked(ip)) {
@@ -116,15 +132,15 @@ function createServer({ dataDir, webDir, port = 51828, onRemoteClip, getRemoteHo
             return;
           }
           pairLimiter.recordSuccess(ip);
+          const codeKey = deriveCodeKey(body.code);
+          const payload = encryptForDevice(codeKey, {
+            deviceId: result.id,
+            key: result.key.toString('base64'),
+            name: result.name,
+            ...connectionInfo(req.socket.localPort),
+          });
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(
-            JSON.stringify({
-              deviceId: result.id,
-              key: result.key.toString('base64'),
-              name: result.name,
-              ...connectionInfo(),
-            })
-          );
+          res.end(JSON.stringify({ payload }));
         })
         .catch(() => {
           res.writeHead(400, { 'Content-Type': 'application/json' });
@@ -133,18 +149,16 @@ function createServer({ dataDir, webDir, port = 51828, onRemoteClip, getRemoteHo
       return;
     }
     serveStatic(webDir, req, res);
-  });
+  }
 
-  const wss = new WebSocketServer({ server: httpServer, path: '/ws' });
-
-  wss.on('connection', (ws, req) => {
+  function handleWsConnection(ws, req) {
     const ip = req.socket.remoteAddress || 'unknown';
     if (authLimiter.isBlocked(ip)) {
       ws.close(4029, 'too_many_attempts');
       return;
     }
 
-    const url = new URL(req.url, 'https://placeholder');
+    const url = new URL(req.url, 'http://placeholder');
     const deviceId = url.searchParams.get('deviceId');
     const device = deviceId ? pairing.getDevice(deviceId) : null;
 
@@ -153,6 +167,7 @@ function createServer({ dataDir, webDir, port = 51828, onRemoteClip, getRemoteHo
       return;
     }
 
+    const reportPort = req.socket.localPort;
     let authenticated = false;
     const challenge = crypto.randomBytes(16);
     ws.send(JSON.stringify({ type: 'challenge', challenge: challenge.toString('base64url') }));
@@ -181,7 +196,7 @@ function createServer({ dataDir, webDir, port = 51828, onRemoteClip, getRemoteHo
           ws.send(
             JSON.stringify({
               type: 'authOk',
-              payload: encryptForDevice(device.key, { history: hub.getHistory(), ...connectionInfo() }),
+              payload: encryptForDevice(device.key, { history: hub.getHistory(), ...connectionInfo(reportPort) }),
             })
           );
         } else {
@@ -214,7 +229,24 @@ function createServer({ dataDir, webDir, port = 51828, onRemoteClip, getRemoteHo
     });
 
     ws.on('error', () => ws.close());
-  });
+  }
+
+  function handleListenError(err) {
+    if (typeof onListenError === 'function') onListenError(err);
+    else console.error('ClipSync server failed to start:', err);
+  }
+
+  // A bind failure (e.g. port already taken by another running instance) would otherwise throw
+  // as an uncaught exception and crash the whole Electron process — surface it instead.
+  const httpsServer = https.createServer({ key, cert }, handleRequest);
+  httpsServer.on('error', handleListenError);
+  const wssHttps = new WebSocketServer({ server: httpsServer, path: '/ws' });
+  wssHttps.on('connection', handleWsConnection);
+
+  const plainServer = http.createServer(handleRequest);
+  plainServer.on('error', handleListenError);
+  const wssHttp = new WebSocketServer({ server: plainServer, path: '/ws' });
+  wssHttp.on('connection', handleWsConnection);
 
   // Keep LAN connections alive through idle NAT/router timeouts.
   const pingInterval = setInterval(() => {
@@ -256,21 +288,18 @@ function createServer({ dataDir, webDir, port = 51828, onRemoteClip, getRemoteHo
     clearInterval(pingInterval);
     pairLimiter.stop();
     authLimiter.stop();
-    wss.close();
-    httpServer.close();
+    wssHttps.close();
+    wssHttp.close();
+    httpsServer.close();
+    plainServer.close();
   }
 
-  // A bind failure (e.g. port already taken by another running instance) would otherwise throw
-  // as an uncaught exception and crash the whole Electron process — surface it instead.
-  httpServer.on('error', (err) => {
-    if (typeof onListenError === 'function') onListenError(err);
-    else console.error('ClipSync server failed to start:', err);
-  });
-
-  httpServer.listen(port, '0.0.0.0');
+  httpsServer.listen(port, '0.0.0.0');
+  plainServer.listen(httpPort, '0.0.0.0');
 
   return {
     port,
+    httpPort,
     fingerprint,
     lanIps: detectLanIps(),
     pairing,

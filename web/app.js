@@ -62,12 +62,40 @@ async function encryptForServer(value) {
   return bytesToB64url(combined);
 }
 
-async function decryptFromServer(envelopeB64url) {
+async function decryptWithKey(key, envelopeB64url) {
   const bytes = b64urlToBytes(envelopeB64url);
   const iv = bytes.slice(0, 12);
   const data = bytes.slice(12);
-  const ptBuf = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, aesKey, data);
+  const ptBuf = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, data);
   return JSON.parse(new TextDecoder().decode(ptBuf));
+}
+
+function decryptFromServer(envelopeB64url) {
+  return decryptWithKey(aesKey, envelopeB64url);
+}
+
+/**
+ * Derives the same AES-256 key the server derives from the pairing code (SHA-256 of the code
+ * string) to decrypt the one-time /api/pair response — confidential even over plain HTTP, which
+ * is what the Android app uses since its WebView can't accept our self-signed HTTPS cert.
+ */
+async function deriveCodeKey(code) {
+  const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(code));
+  return crypto.subtle.importKey('raw', hash, { name: 'AES-GCM' }, false, ['decrypt']);
+}
+
+// ---- native app (Capacitor) detection --------------------------------------
+
+function isNative() {
+  return !!(window.Capacitor && window.Capacitor.Plugins);
+}
+
+function httpScheme() {
+  return isNative() ? 'http' : 'https';
+}
+
+function wsScheme() {
+  return isNative() ? 'ws' : 'wss';
 }
 
 // ---- native clipboard (Capacitor) with browser fallback -----------------------
@@ -231,8 +259,9 @@ function renderNotPaired() {
  * origin — the browser/PWA flow, reached by navigating to the PC's URL, already IS that host.
  */
 async function completePairing(code, deviceName, hosts) {
-  const targets = hosts && hosts.length ? hosts.map((h) => `https://${h}/api/pair`) : ['/api/pair'];
+  const targets = hosts && hosts.length ? hosts.map((h) => `${httpScheme()}://${h}/api/pair`) : ['/api/pair'];
   let response = null;
+  const codeKey = await deriveCodeKey(code);
   for (const url of targets) {
     try {
       const res = await fetch(url, {
@@ -241,7 +270,8 @@ async function completePairing(code, deviceName, hosts) {
         body: JSON.stringify({ code, deviceName }),
       });
       if (res.ok) {
-        response = await res.json();
+        const { payload } = await res.json();
+        response = await decryptWithKey(codeKey, payload);
         break;
       }
     } catch {
@@ -274,7 +304,7 @@ async function completePairing(code, deviceName, hosts) {
 function connectToHost(host, deviceId, timeoutMs) {
   return new Promise((resolve, reject) => {
     let settled = false;
-    const socket = new WebSocket(`wss://${host}/ws?deviceId=${encodeURIComponent(deviceId)}`);
+    const socket = new WebSocket(`${wsScheme()}://${host}/ws?deviceId=${encodeURIComponent(deviceId)}`);
     const timer = setTimeout(() => {
       if (settled) return;
       settled = true;

@@ -9,7 +9,8 @@ const { startUpnp } = require('../server/upnp');
 const { buildIconPng } = require('./icon');
 const { loadSettings, saveSettings } = require('./settings');
 
-const PORT = 51828;
+const PORT = 51828; // HTTPS/WSS — browser/PWA
+const HTTP_PORT = 51829; // plain HTTP/WS — Android app (its WebView can't accept our self-signed cert)
 const POLL_MS = 700;
 
 let tray = null;
@@ -50,8 +51,9 @@ function buildJoinUrl(code) {
 
 function buildAppJoinUrl(code) {
   // The Android app has no page origin to pair against, so the deep link carries every host
-  // it should try (LAN candidates + the configured remote/DDNS host, if any).
-  const lan = server.lanIps.map((ip) => `${ip}:${server.port}`).join(',');
+  // it should try (LAN candidates + the configured remote/DDNS host, if any). It uses the plain
+  // HTTP port: the app's WebView has no interactive way to accept our self-signed HTTPS cert.
+  const lan = server.lanIps.map((ip) => `${ip}:${server.httpPort}`).join(',');
   const params = new URLSearchParams({ code, lan });
   if (settings.remoteAccessEnabled && settings.remoteHost) params.set('remote', settings.remoteHost);
   return `clipsync://pair?${params.toString()}`;
@@ -138,6 +140,7 @@ function snapshotState() {
     history: server.hub.getHistory(),
     lanIps: server.lanIps,
     port: server.port,
+    httpPort: server.httpPort,
     remoteAccessEnabled: settings.remoteAccessEnabled,
     remoteHost: settings.remoteHost,
     upnp: upnp ? upnp.getStatus() : { active: false, externalIp: null, error: null },
@@ -148,7 +151,7 @@ function snapshotState() {
 // touches the router, matching the "local by default" choice.
 async function enableRemoteAccess() {
   if (upnp) return;
-  upnp = startUpnp(PORT);
+  upnp = startUpnp([PORT, HTTP_PORT]);
   try {
     await upnp.start();
   } finally {
@@ -233,6 +236,7 @@ app.whenReady().then(async () => {
     dataDir,
     webDir,
     port: PORT,
+    httpPort: HTTP_PORT,
     getRemoteHost: () => (settings.remoteAccessEnabled ? settings.remoteHost : null),
     onRemoteClip: (text) => {
       lastKnownText = text;

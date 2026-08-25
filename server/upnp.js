@@ -19,7 +19,8 @@ function withTimeout(promise, ms) {
  * the same soft "active: false" result. Callers must treat that as a normal outcome and fall
  * back to showing manual port-forward instructions, never as a hard error.
  */
-function startUpnp(port) {
+function startUpnp(ports) {
+  const portList = Array.isArray(ports) ? ports : [ports];
   let gateway = null;
   let refreshTimer = null;
   let lastResult = { active: false, externalIp: null, error: null };
@@ -35,7 +36,9 @@ function startUpnp(port) {
         }
         if (!gateway) throw new Error('no_upnp_gateway_found');
       }
-      await gateway.mapAll(port, { protocol: 'tcp', ttl: MAPPING_TTL_SECONDS });
+      for (const port of portList) {
+        await gateway.mapAll(port, { protocol: 'tcp', ttl: MAPPING_TTL_SECONDS });
+      }
       const ip = await gateway.externalIp();
       return { active: true, externalIp: ip, error: null };
     })();

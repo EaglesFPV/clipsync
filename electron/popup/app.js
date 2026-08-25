@@ -94,10 +94,9 @@ function renderRemoteAccess() {
     input.value = currentState.remoteHost || '';
   }
 
-  const port = currentState.port;
   const lan = (currentState.lanIps && currentState.lanIps[0]) || '?';
   document.getElementById('remote-hint').textContent =
-    `Redirige le port TCP ${port} vers ${lan}:${port} sur ton routeur (automatique si le statut ci-dessus est vert), puis renseigne ici le nom d'hôte DDNS — ex. active-le depuis le NAS : DSM > Panneau de configuration > Accès externe > DDNS.`;
+    `Redirige les ports TCP ${currentState.port} (navigateur) et ${currentState.httpPort} (app Android) vers ${lan} sur ton routeur (automatique si le statut ci-dessus est vert), puis renseigne ici le nom d'hôte DDNS — ex. active-le depuis le NAS : DSM > Panneau de configuration > Accès externe > DDNS.`;
 }
 
 function escapeHtml(str) {
