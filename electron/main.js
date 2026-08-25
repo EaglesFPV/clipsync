@@ -1,7 +1,7 @@
 'use strict';
 
 const path = require('path');
-const { app, BrowserWindow, Tray, Menu, clipboard, ipcMain, nativeImage, shell } = require('electron');
+const { app, BrowserWindow, Tray, Menu, clipboard, ipcMain, nativeImage, shell, dialog } = require('electron');
 const QRCode = require('qrcode');
 
 const { createServer } = require('../server');
@@ -19,6 +19,22 @@ let upnp = null;
 let settings = { remoteAccessEnabled: false, remoteHost: null };
 let dataDir = '';
 let lastKnownText = '';
+
+// ClipSync stays running in the tray after the popup is closed — without this, launching the
+// .exe again while it's already running would crash trying to rebind the same port (see
+// httpServer's 'error' handler in server/index.js). Instead, just surface the existing window.
+const gotSingleInstanceLock = app.requestSingleInstanceLock();
+if (!gotSingleInstanceLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (popupWindow) {
+      if (popupWindow.isMinimized()) popupWindow.restore();
+      popupWindow.show();
+      popupWindow.focus();
+    }
+  });
+}
 
 function pickLanIp(lanIps) {
   return lanIps[0] || '127.0.0.1';
@@ -203,6 +219,8 @@ function registerIpc() {
 }
 
 app.whenReady().then(async () => {
+  if (!gotSingleInstanceLock) return; // a second instance: app.quit() above is already tearing it down
+
   // Reading the clipboard before the app is ready can hang on Windows (no message pump yet),
   // so this is the earliest point it's safe to touch electron.clipboard.
   lastKnownText = clipboard.readText() || '';
@@ -220,6 +238,16 @@ app.whenReady().then(async () => {
       lastKnownText = text;
       clipboard.writeText(text);
       updatePopupState();
+    },
+    onListenError: (err) => {
+      dialog.showErrorBox(
+        'ClipSync ne peut pas démarrer',
+        err && err.code === 'EADDRINUSE'
+          ? `Le port ${PORT} est déjà utilisé par une autre application. Ferme-la, ou une instance de ClipSync est peut-être déjà lancée (regarde dans la zone de notification).`
+          : `Erreur réseau : ${err && err.message ? err.message : err}`
+      );
+      app.isQuitting = true;
+      app.quit();
     },
   });
 

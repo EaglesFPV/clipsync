@@ -79,8 +79,9 @@ function serveStatic(webDir, req, res) {
  * options.getRemoteHost() optionally returns the "host:port" reachable from outside the LAN
  * (DDNS hostname + forwarded port), read live on every call so a change in settings propagates
  * to clients without a server restart.
+ * options.onListenError(err) is called if the server fails to bind (e.g. port already in use).
  */
-function createServer({ dataDir, webDir, port = 51828, onRemoteClip, getRemoteHost }) {
+function createServer({ dataDir, webDir, port = 51828, onRemoteClip, getRemoteHost, onListenError }) {
   const { key, cert, fingerprint } = getOrCreateCert(dataDir);
   const pairing = new PairingManager(dataDir);
   const hub = new ClipboardHub();
@@ -258,6 +259,13 @@ function createServer({ dataDir, webDir, port = 51828, onRemoteClip, getRemoteHo
     wss.close();
     httpServer.close();
   }
+
+  // A bind failure (e.g. port already taken by another running instance) would otherwise throw
+  // as an uncaught exception and crash the whole Electron process — surface it instead.
+  httpServer.on('error', (err) => {
+    if (typeof onListenError === 'function') onListenError(err);
+    else console.error('ClipSync server failed to start:', err);
+  });
 
   httpServer.listen(port, '0.0.0.0');
 
