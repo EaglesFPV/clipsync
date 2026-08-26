@@ -2,6 +2,7 @@
 
 const path = require('path');
 const { app, BrowserWindow, Tray, Menu, clipboard, ipcMain, nativeImage, shell, dialog } = require('electron');
+const { autoUpdater } = require('electron-updater');
 const QRCode = require('qrcode');
 
 const { createServer } = require('../server');
@@ -20,6 +21,7 @@ let upnp = null;
 let settings = { remoteAccessEnabled: false, remoteHost: null };
 let dataDir = '';
 let lastKnownText = '';
+let updateState = { checking: false, available: false, downloaded: false, version: null, error: null };
 
 // ClipSync stays running in the tray after the popup is closed — without this, launching the
 // .exe again while it's already running would crash trying to rebind the same port (see
@@ -114,23 +116,78 @@ function togglePopup() {
   popupWindow.focus();
 }
 
+function buildTrayMenu() {
+  const template = [{ label: 'Ouvrir ClipSync', click: togglePopup }];
+
+  if (updateState.downloaded) {
+    template.push({ type: 'separator' });
+    template.push({
+      label: `Redémarrer pour installer la mise à jour (v${updateState.version})`,
+      click: () => {
+        app.isQuitting = true;
+        autoUpdater.quitAndInstall();
+      },
+    });
+  } else if (updateState.available) {
+    template.push({ type: 'separator' });
+    template.push({ label: `Téléchargement de la mise à jour v${updateState.version}…`, enabled: false });
+  }
+
+  template.push({ type: 'separator' });
+  template.push({
+    label: 'Quitter',
+    click: () => {
+      app.isQuitting = true;
+      app.quit();
+    },
+  });
+  return Menu.buildFromTemplate(template);
+}
+
+function updateTrayMenu() {
+  if (tray) tray.setContextMenu(buildTrayMenu());
+}
+
 function createTray() {
   const icon = nativeImage.createFromBuffer(buildIconPng(32));
   tray = new Tray(icon);
   tray.setToolTip('ClipSync — presse-papier synchronisé');
   tray.on('click', togglePopup);
-  const menu = Menu.buildFromTemplate([
-    { label: 'Ouvrir ClipSync', click: togglePopup },
-    { type: 'separator' },
-    {
-      label: 'Quitter',
-      click: () => {
-        app.isQuitting = true;
-        app.quit();
-      },
-    },
-  ]);
-  tray.setContextMenu(menu);
+  updateTrayMenu();
+}
+
+// Never touches anything unless the app is actually installed/packaged — running via
+// `npm start` in dev has no update feed and electron-updater would just error noisily.
+function setupAutoUpdater() {
+  if (!app.isPackaged) return;
+
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+
+  autoUpdater.on('checking-for-update', () => {
+    updateState = { ...updateState, checking: true, error: null };
+  });
+  autoUpdater.on('update-available', (info) => {
+    updateState = { ...updateState, checking: false, available: true, version: info.version };
+    updateTrayMenu();
+    updatePopupState();
+  });
+  autoUpdater.on('update-not-available', () => {
+    updateState = { ...updateState, checking: false, available: false };
+  });
+  autoUpdater.on('update-downloaded', (info) => {
+    updateState = { ...updateState, downloaded: true, version: info.version };
+    updateTrayMenu();
+    updatePopupState();
+  });
+  autoUpdater.on('error', (err) => {
+    updateState = { ...updateState, checking: false, error: (err && err.message) || String(err) };
+    updatePopupState();
+  });
+
+  const check = () => autoUpdater.checkForUpdates().catch(() => {});
+  check();
+  setInterval(check, 4 * 60 * 60 * 1000);
 }
 
 function snapshotState() {
@@ -144,6 +201,8 @@ function snapshotState() {
     remoteAccessEnabled: settings.remoteAccessEnabled,
     remoteHost: settings.remoteHost,
     upnp: upnp ? upnp.getStatus() : { active: false, externalIp: null, error: null },
+    update: updateState,
+    appVersion: app.getVersion(),
   };
 }
 
@@ -219,6 +278,13 @@ function registerIpc() {
   ipcMain.handle('popup:open-external', (_evt, url) => {
     if (typeof url === 'string' && url.startsWith('https://')) shell.openExternal(url);
   });
+
+  ipcMain.handle('popup:install-update', () => {
+    if (!updateState.downloaded) return false;
+    app.isQuitting = true;
+    autoUpdater.quitAndInstall();
+    return true;
+  });
 }
 
 app.whenReady().then(async () => {
@@ -261,6 +327,7 @@ app.whenReady().then(async () => {
   registerIpc();
   createPopupWindow();
   startClipboardWatcher();
+  setupAutoUpdater();
 
   if (settings.remoteAccessEnabled) enableRemoteAccess();
 });

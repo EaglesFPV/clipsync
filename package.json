@@ -17,6 +17,7 @@
     "@capacitor/app": "^8.1.1",
     "@capacitor/clipboard": "^8.0.1",
     "@capacitor/core": "^8.5.0",
+    "electron-updater": "^6.3.9",
     "qrcode": "^1.5.4",
     "selfsigned": "^2.4.1",
     "ws": "^8.18.0"
@@ -38,6 +39,17 @@
     "directories": {
       "output": "release"
     },
+    "publish": {
+      "provider": "github",
+      "owner": "EaglesFPV",
+      "repo": "clipsync"
+    },
+    "extraResources": [
+      {
+        "from": "build/app-update.yml",
+        "to": "app-update.yml"
+      }
+    ],
     "win": {
       "target": [
         {

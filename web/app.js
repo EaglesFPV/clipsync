@@ -98,6 +98,52 @@ function wsScheme() {
   return isNative() ? 'ws' : 'wss';
 }
 
+// ---- app update check (Android only — the browser/PWA always serves the latest code) --------
+
+function isNewerVersion(candidate, current) {
+  const a = String(candidate).split('.').map((n) => parseInt(n, 10) || 0);
+  const b = String(current).split('.').map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const diff = (a[i] || 0) - (b[i] || 0);
+    if (diff !== 0) return diff > 0;
+  }
+  return false;
+}
+
+function showUpdateBanner(version, downloadUrl) {
+  const banner = document.getElementById('update-banner');
+  if (!banner) return;
+  banner.style.display = 'flex';
+  banner.innerHTML = `<span>Nouvelle version disponible (v${version})</span>`;
+  if (downloadUrl) {
+    const link = document.createElement('a');
+    link.href = downloadUrl;
+    link.textContent = 'Télécharger';
+    link.addEventListener('click', (e) => {
+      e.preventDefault();
+      window.open(downloadUrl, '_system');
+    });
+    banner.appendChild(link);
+  }
+}
+
+async function checkForAppUpdate() {
+  const AppPlugin = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.App;
+  if (!AppPlugin) return; // only the packaged Android app ships as a versioned APK
+  try {
+    const info = await AppPlugin.getInfo();
+    const res = await fetch('https://api.github.com/repos/EaglesFPV/clipsync/releases/latest');
+    if (!res.ok) return;
+    const release = await res.json();
+    const latest = (release.tag_name || '').replace(/^v/, '');
+    if (!latest || !isNewerVersion(latest, info.version)) return;
+    const apkAsset = (release.assets || []).find((a) => a.name.endsWith('.apk'));
+    showUpdateBanner(latest, apkAsset && apkAsset.browser_download_url);
+  } catch {
+    // offline, rate-limited, or the API shape changed: skip silently, try again next time
+  }
+}
+
 // ---- native clipboard (Capacitor) with browser fallback -----------------------
 
 function nativeClipboard() {
@@ -422,6 +468,9 @@ async function boot() {
   if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/service-worker.js').catch(() => {});
   }
+
+  checkForAppUpdate();
+  setInterval(checkForAppUpdate, 6 * 60 * 60 * 1000);
 
   const params = new URLSearchParams(location.search);
   const code = params.get('code');

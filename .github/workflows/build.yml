@@ -21,20 +21,35 @@ jobs:
 
       - run: npm ci
 
+      # electron-updater compares this version against the tagged GitHub release, so it must
+      # match the tag — package.json otherwise stays at a fixed placeholder.
+      - name: Set version from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: npm version --no-git-tag-version --allow-same-version "${GITHUB_REF_NAME#v}"
+
       - run: npm run dist
+
+      # electron-builder's latest.yml doesn't always match the installer filename it just built
+      # (a long-standing quirk — see scripts/align-installer-name.js) unless electron-builder
+      # does its own upload, which we don't use here.
+      - run: node scripts/align-installer-name.js
 
       - uses: actions/upload-artifact@v4
         with:
           name: ClipSync-windows
           path: |
             release/*.exe
+            release/latest.yml
           if-no-files-found: error
 
       - name: Create GitHub release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: release/*.exe
+          files: |
+            release/*.exe
+            release/latest.yml
 
   build-android:
     runs-on: ubuntu-latest
@@ -60,20 +75,40 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v4
 
-      - name: Build debug APK
+      - name: Determine version
+        id: version
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "name=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=0.0.0-dev" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Every release must be signed with the same key (see android/app/build.gradle) or Android
+      # treats it as a different app and refuses to update in place, losing pairing data.
+      - name: Decode signing keystore
+        run: echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > "${{ runner.temp }}/clipsync-release.jks"
+
+      - name: Build release APK
         working-directory: android
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/clipsync-release.jks
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           chmod +x ./gradlew
-          ./gradlew assembleDebug --no-daemon
+          ./gradlew assembleRelease --no-daemon -PversionNameOverride=${{ steps.version.outputs.name }} -PversionCodeOverride=${{ github.run_number }}
 
       - uses: actions/upload-artifact@v4
         with:
           name: ClipSync-android
-          path: android/app/build/outputs/apk/debug/*.apk
+          path: android/app/build/outputs/apk/release/*.apk
           if-no-files-found: error
 
       - name: Create GitHub release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: android/app/build/outputs/apk/debug/*.apk
+          files: android/app/build/outputs/apk/release/*.apk

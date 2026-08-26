@@ -99,6 +99,28 @@ function renderRemoteAccess() {
     `Redirige les ports TCP ${currentState.port} (navigateur) et ${currentState.httpPort} (app Android) vers ${lan} sur ton routeur (automatique si le statut ci-dessus est vert), puis renseigne ici le nom d'hôte DDNS — ex. active-le depuis le NAS : DSM > Panneau de configuration > Accès externe > DDNS.`;
 }
 
+function renderUpdateStatus() {
+  const banner = document.getElementById('update-banner');
+  const update = currentState.update || { checking: false, available: false, downloaded: false, version: null };
+
+  if (update.downloaded) {
+    banner.style.display = 'flex';
+    banner.innerHTML = `<span>Mise à jour v${escapeHtml(update.version)} prête.</span>`;
+    const btn = document.createElement('button');
+    btn.textContent = 'Redémarrer et installer';
+    btn.onclick = () => window.clipsync.installUpdate();
+    banner.appendChild(btn);
+  } else if (update.available) {
+    banner.style.display = 'flex';
+    banner.innerHTML = `<span>Téléchargement de la mise à jour v${escapeHtml(update.version)}…</span>`;
+  } else {
+    banner.style.display = 'none';
+  }
+
+  const footer = document.getElementById('version-footer');
+  if (footer && currentState.appVersion) footer.textContent = `ClipSync v${currentState.appVersion}`;
+}
+
 function escapeHtml(str) {
   const div = document.createElement('div');
   div.textContent = str;
@@ -133,6 +155,7 @@ async function init() {
   renderDevices();
   renderHistory();
   renderRemoteAccess();
+  renderUpdateStatus();
   await refreshQr();
 
   document.getElementById('refresh-qr').onclick = refreshQr;
@@ -152,6 +175,7 @@ async function init() {
     renderDevices();
     renderHistory();
     renderRemoteAccess();
+    renderUpdateStatus();
   });
 }
 

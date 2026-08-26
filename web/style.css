@@ -174,3 +174,24 @@ main {
   opacity: 1;
   transform: translateY(0);
 }
+
+.update-banner {
+  margin: 12px 18px 0;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: #16351f;
+  border: 1px solid #1f5c34;
+  color: #b6f0c4;
+  font-size: 13px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.update-banner a {
+  color: #b6f0c4;
+  font-weight: 600;
+  text-decoration: underline;
+  white-space: nowrap;
+}

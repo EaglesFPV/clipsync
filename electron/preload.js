@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld('clipsync', {
   setRemoteHost: (remoteHost) => ipcRenderer.invoke('popup:set-remote-host', remoteHost),
   setRemoteAccessEnabled: (enabled) => ipcRenderer.invoke('popup:set-remote-access-enabled', enabled),
   copyEntry: (text) => ipcRenderer.invoke('popup:copy-entry', text),
+  installUpdate: () => ipcRenderer.invoke('popup:install-update'),
   openExternal: (url) => ipcRenderer.invoke('popup:open-external', url),
   onStateUpdate: (callback) => {
     const listener = (_evt, state) => callback(state);
