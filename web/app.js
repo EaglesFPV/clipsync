@@ -444,7 +444,15 @@ async function connect(deviceId, hosts) {
       const entry = await decryptFromServer(msg.payload);
       history = [entry, ...history].slice(0, 25);
       renderHistory();
-      showToast('Nouveau texte reçu du PC.');
+      // Best-effort: write straight to the OS clipboard so the entry is immediately pasteable.
+      // Only reliable while this app is open in the foreground (native ClipboardManager writes
+      // need that); the "Copier" button in the history list stays as the always-works fallback.
+      try {
+        await writeClipboard(entry.text);
+        showToast('Texte copié automatiquement depuis le PC.');
+      } catch {
+        showToast('Nouveau texte reçu du PC.');
+      }
     }
   });
 
