@@ -115,6 +115,19 @@ function createServer({ dataDir, webDir, port = 51828, httpPort = 51829, onRemot
   }
 
   function handleRequest(req, res) {
+    // The Android app's page (served from Capacitor's own http://localhost origin) always pairs
+    // against an absolute host:port picked from the deep link, so this request is genuinely
+    // cross-origin — the JSON POST body makes the browser send a CORS preflight first, which
+    // would otherwise 404 here and silently block the real request.
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204, {
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type',
+      });
+      res.end();
+      return;
+    }
     if (req.method === 'POST' && req.url === '/api/pair') {
       const ip = req.socket.remoteAddress || 'unknown';
       if (pairLimiter.isBlocked(ip)) {
