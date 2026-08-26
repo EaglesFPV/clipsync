@@ -307,6 +307,9 @@ function renderNotPaired() {
 async function completePairing(code, deviceName, hosts) {
   const targets = hosts && hosts.length ? hosts.map((h) => `${httpScheme()}://${h}/api/pair`) : ['/api/pair'];
   let response = null;
+  // Diagnostic detail per attempted host — fetch() only exposes a generic error to JS, but the
+  // status code / response body still tells apart "unreachable" from "reached but rejected".
+  const attempts = [];
   const codeKey = await deriveCodeKey(code);
   for (const url of targets) {
     try {
@@ -320,16 +323,28 @@ async function completePairing(code, deviceName, hosts) {
         response = await decryptWithKey(codeKey, payload);
         break;
       }
-    } catch {
-      // try the next candidate host
+      let body = '';
+      try {
+        body = await res.text();
+      } catch {
+        // ignore — status code alone is still useful
+      }
+      attempts.push(`${url} → HTTP ${res.status} ${body}`.trim());
+    } catch (err) {
+      attempts.push(`${url} → ${(err && err.message) || err}`);
     }
   }
 
   if (!response) {
     const errorEl = document.getElementById('pair-error');
-    const msg = "Impossible d'appairer — code invalide/expiré, ou aucun des hôtes n'est joignable depuis ici.";
-    if (errorEl) errorEl.textContent = msg;
-    else appEl.innerHTML = `<div class="card"><p class="message">${msg}</p></div>`;
+    const detail = attempts.length ? attempts.join(' | ') : 'aucun hôte à essayer';
+    const msg = `Impossible d'appairer. Détails : ${detail}`;
+    if (errorEl) {
+      errorEl.textContent = msg;
+    } else {
+      appEl.innerHTML = '<div class="card"><p class="message" id="pair-error-fallback"></p></div>';
+      document.getElementById('pair-error-fallback').textContent = msg;
+    }
     return;
   }
 
